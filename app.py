@@ -19,6 +19,9 @@ import pickle
 from functools import lru_cache
 import ta
 import traceback
+import requests
+from bs4 import BeautifulSoup
+import json
 
 load_dotenv()
 
@@ -41,6 +44,17 @@ twitter_client = tweepy.Client(
 prediction_cache = {}
 market_data_cache = {}
 MARKET_DATA_CACHE_DURATION = 60  # Cache duration in seconds
+
+# Market indices to track
+MARKET_INDICES = {
+    '^GSPC': 'S&P 500',
+    '^DJI': 'Dow Jones',
+    '^IXIC': 'NASDAQ',
+    '^RUT': 'Russell 2000',
+    '^VIX': 'VIX',
+    '^FTSE': 'FTSE 100',
+    '^N225': 'Nikkei 225'
+}
 
 def create_lstm_model(input_shape):
     model = Sequential([
@@ -66,50 +80,36 @@ def prepare_data(data, lookback=60):
     return np.array(X), np.array(y), scaler
 
 def calculate_technical_indicators(df):
-    # Add technical indicators
     df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
     df['MACD'] = ta.trend.MACD(df['Close']).macd()
     df['BB_high'] = ta.volatility.BollingerBands(df['Close']).bollinger_hband()
     df['BB_low'] = ta.volatility.BollingerBands(df['Close']).bollinger_lband()
     df['ATR'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close']).average_true_range()
-    
-    # Fill NaN values with forward fill, then backward fill
     df = df.fillna(method='ffill').fillna(method='bfill')
     return df
 
-@lru_cache(maxsize=100)
-def get_social_sentiment(ticker, limit=100):
+def fetch_financial_news():
     try:
-        # Reddit sentiment
-        reddit_posts = reddit.subreddit("wallstreetbets+stocks+investing").search(
-            f"{ticker}", limit=limit, time_filter="week"
-        )
-        
-        # Twitter sentiment
-        tweets = twitter_client.search_recent_tweets(
-            query=f"${ticker} -is:retweet lang:en",
-            max_results=100
-        )
-        
-        sentiment_scores = []
-        
-        # Analyze Reddit posts
-        for post in reddit_posts:
-            blob = TextBlob(post.title + " " + post.selftext)
-            sentiment_scores.append(blob.sentiment.polarity)
-        
-        # Analyze tweets
-        if tweets.data:
-            for tweet in tweets.data:
-                blob = TextBlob(tweet.text)
-                sentiment_scores.append(blob.sentiment.polarity)
-        
-        if sentiment_scores:
-            return sum(sentiment_scores) / len(sentiment_scores)
-        return 0
+        # Using Alpha Vantage News API
+        api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+        url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=market,finance,stocks&apikey={api_key}'
+        response = requests.get(url)
+        data = response.json()
+        return data.get('feed', [])
     except Exception as e:
-        print(f"Error in sentiment analysis: {str(e)}")
-        return 0
+        print(f"Error fetching news: {str(e)}")
+        return []
+
+def fetch_social_sentiment(symbol):
+    try:
+        # Using StockTwits API
+        url = f'https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json'
+        response = requests.get(url)
+        data = response.json()
+        return data.get('messages', [])
+    except Exception as e:
+        print(f"Error fetching social sentiment: {str(e)}")
+        return []
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -120,7 +120,6 @@ def predict():
         start_date = data.get('startDate')
         end_date = data.get('endDate')
         
-        # Input validation
         if not all([ticker, days, start_date, end_date]):
             return jsonify({"error": "Missing required parameters"}), 400
             
@@ -130,12 +129,10 @@ def predict():
         if days < 1 or days > 30:
             return jsonify({"error": "Days must be between 1 and 30"}), 400
         
-        # Check cache
         cache_key = f"{ticker}_{start_date}_{end_date}_{days}"
         if cache_key in prediction_cache:
             return jsonify(prediction_cache[cache_key])
         
-        # Fetch historical data
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(start=start_date, end=end_date)
@@ -150,74 +147,56 @@ def predict():
             print(f"Error fetching data for {ticker}: {str(e)}")
             return jsonify({"error": f"Failed to fetch data for {ticker}"}), 404
         
-        # Calculate technical indicators
         hist = calculate_technical_indicators(hist)
         
-        # Prepare data for LSTM
         lookback = 60
         X, y, scaler = prepare_data(hist['Close'].values, lookback)
         
         if len(X) == 0 or len(y) == 0:
             return jsonify({"error": "Failed to prepare training data"}), 500
         
-        # Train LSTM model
         lstm_model = create_lstm_model((lookback, 1))
         lstm_model.fit(X, y, epochs=50, batch_size=32, verbose=0)
         
-        # Prepare data for XGBoost
         features = ['RSI', 'MACD', 'ATR']
         X_xgb = hist[features].values
-        y_xgb = hist['Close'].values[1:]  # Shift labels by 1 to predict next day
+        y_xgb = hist['Close'].values[1:]
         
-        # Ensure X and y have the same number of samples
-        X_xgb = X_xgb[:-1]  # Remove last row to match y_xgb length
+        X_xgb = X_xgb[:-1]
         
         if len(X_xgb) != len(y_xgb):
             return jsonify({"error": "Data preparation error: Feature/label mismatch"}), 500
         
-        # Train XGBoost model
         xgb_model = XGBRegressor(objective='reg:squarederror')
         xgb_model.fit(X_xgb, y_xgb)
         
-        # Get historical closing prices
         historical_prices = hist['Close'].tolist()
         
-        # Make future predictions
         lstm_preds = []
         xgb_preds = []
         last_sequence = X[-1]
         last_features = hist[features].iloc[-1:].values
         
         for _ in range(days):
-            # LSTM prediction
             lstm_pred = lstm_model.predict(last_sequence.reshape(1, lookback, 1))
             lstm_pred = scaler.inverse_transform(lstm_pred)[0][0]
             lstm_preds.append(lstm_pred)
             
-            # Update sequence for next prediction
             last_sequence = np.roll(last_sequence, -1)
             last_sequence[-1] = scaler.transform([[lstm_pred]])[0][0]
             
-            # XGBoost prediction
             xgb_pred = xgb_model.predict(last_features)[0]
             xgb_preds.append(xgb_pred)
             
-            # Update features for next prediction (simplified)
             last_features = np.array([
-                [50,  # Neutral RSI
-                0,   # Neutral MACD
-                hist['ATR'].mean()]  # Average ATR
+                [50, 0, hist['ATR'].mean()]
             ])
         
-        # Ensemble predictions (weighted average)
         future_predictions = [0.6 * lstm + 0.4 * xgb for lstm, xgb in zip(lstm_preds, xgb_preds)]
         
-        # Get social sentiment
-        sentiment = get_social_sentiment(ticker)
-        
-        # Adjust predictions based on sentiment
-        sentiment_factor = 1 + (sentiment * 0.1)  # Max ±10% adjustment
-        future_predictions = [p * sentiment_factor for p in future_predictions]
+        # Fetch additional data
+        news = fetch_financial_news()
+        social_sentiment = fetch_social_sentiment(ticker)
         
         response = {
             "ticker": ticker,
@@ -227,11 +206,11 @@ def predict():
                 "trend": round(((future_predictions[-1] - future_predictions[0]) / future_predictions[0]) * 100, 2),
                 "volatility": round(np.std(future_predictions) / np.mean(future_predictions) * 100, 2),
                 "rsi": round(float(hist['RSI'].iloc[-1]), 2) if not pd.isna(hist['RSI'].iloc[-1]) else 50,
-                "sentiment": round(sentiment, 2)
-            }
+            },
+            "news": news[:10],  # Latest 10 news articles
+            "social": social_sentiment[:10]  # Latest 10 social posts
         }
         
-        # Cache the results
         prediction_cache[cache_key] = response
         
         return jsonify(response)
@@ -241,7 +220,6 @@ def predict():
         return jsonify({"error": str(e)}), 500
 
 def validate_ticker(ticker):
-    # Check if ticker is valid format (letters, numbers, and hyphens only)
     if not re.match("^[A-Z0-9-]+$", ticker):
         return False
     return True
@@ -251,52 +229,68 @@ def market_data():
     try:
         current_time = datetime.now()
         
-        # Check cache
         if 'data' in market_data_cache and 'timestamp' in market_data_cache:
             cache_age = (current_time - market_data_cache['timestamp']).total_seconds()
             if cache_age < MARKET_DATA_CACHE_DURATION:
                 return jsonify(market_data_cache['data'])
         
-        # Define major indices
-        indices = {
-            '^GSPC': 'S&P 500',
-            '^IXIC': 'NASDAQ',
-            '^DJI': 'DOW',
-            '^RUT': 'RUSSELL 2000'
-        }
-        
         market_data = {
             "indices": {},
+            "predictions": {},
             "movers": {}
         }
         
-        # Fetch real-time data for each index
-        for symbol, name in indices.items():
+        # Fetch and predict for each index
+        for symbol, name in MARKET_INDICES.items():
             try:
                 index = yf.Ticker(symbol)
-                hist = index.history(period="1d")
+                hist = index.history(period="1y")  # Get 1 year of historical data
                 
                 if not hist.empty:
                     current_price = hist['Close'].iloc[-1]
-                    open_price = hist['Open'].iloc[0]
+                    open_price = hist['Open'].iloc[-1]
                     price_change = ((current_price - open_price) / open_price) * 100
                     
-                    market_data["indices"][name] = {
-                        "value": round(current_price, 2),
-                        "change": round(price_change, 2)
-                    }
+                    # Calculate predictions for indices
+                    hist = calculate_technical_indicators(hist)
+                    lookback = 60
+                    X, y, scaler = prepare_data(hist['Close'].values[-lookback:], lookback)
+                    
+                    if len(X) > 0:
+                        lstm_model = create_lstm_model((lookback, 1))
+                        lstm_model.fit(X, y, epochs=50, batch_size=32, verbose=0)
+                        
+                        # Predict next 5 days
+                        predictions = []
+                        last_sequence = X[-1]
+                        
+                        for _ in range(5):
+                            pred = lstm_model.predict(last_sequence.reshape(1, lookback, 1))
+                            pred = scaler.inverse_transform(pred)[0][0]
+                            predictions.append(pred)
+                            
+                            last_sequence = np.roll(last_sequence, -1)
+                            last_sequence[-1] = scaler.transform([[pred]])[0][0]
+                        
+                        market_data["indices"][name] = {
+                            "value": round(current_price, 2),
+                            "change": round(price_change, 2)
+                        }
+                        
+                        market_data["predictions"][name] = {
+                            "current": round(current_price, 2),
+                            "forecast": [round(p, 2) for p in predictions],
+                            "trend": round(((predictions[-1] - predictions[0]) / predictions[0]) * 100, 2)
+                        }
                     
             except Exception as index_error:
-                print(f"Error fetching data for {symbol}: {str(index_error)}")
-                traceback.print_exc()
+                print(f"Error processing {symbol}: {str(index_error)}")
                 continue
         
-        # Get top gainers and losers
         try:
             market_data["movers"] = get_top_movers()
         except Exception as e:
             print(f"Error fetching top movers: {str(e)}")
-            traceback.print_exc()
             market_data["movers"] = {"gainers": [], "losers": []}
         
         if not market_data["indices"]:
@@ -314,11 +308,9 @@ def market_data():
         return jsonify({"error": "Failed to fetch market data"}), 500
 
 def get_top_movers():
-    # List of S&P 500 stocks (you might want to update this list periodically)
     sp500_tickers = [
         'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'BRK-B', 'XOM', 'UNH', 'JNJ',
-        'JPM', 'V', 'PG', 'MA', 'HD', 'CVX', 'MRK', 'ABBV', 'LLY', 'PFE',
-        # Add more tickers as needed
+        'JPM', 'V', 'PG', 'MA', 'HD', 'CVX', 'MRK', 'ABBV', 'LLY', 'PFE'
     ]
     
     gainers = []
@@ -353,13 +345,12 @@ def get_top_movers():
             print(f"Error fetching data for {ticker}: {str(e)}")
             continue
     
-    # Sort by absolute change percentage
     gainers.sort(key=lambda x: x['change'], reverse=True)
     losers.sort(key=lambda x: x['change'])
     
     return {
-        "gainers": gainers[:5],  # Top 5 gainers
-        "losers": losers[:5]     # Top 5 losers
+        "gainers": gainers[:5],
+        "losers": losers[:5]
     }
 
 if __name__ == '__main__':

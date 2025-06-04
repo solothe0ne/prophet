@@ -2,11 +2,21 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://127.0.0.1:5000';
 
-interface PredictionParams {
+// Add types for better type safety
+export interface PredictionParams {
   ticker: string;
   days: number;
   startDate: string;
   endDate: string;
+}
+
+export interface NewsArticle {
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  imageUrl?: string;
 }
 
 export const fetchPrediction = async (params: PredictionParams) => {
@@ -22,23 +32,31 @@ export const fetchPrediction = async (params: PredictionParams) => {
   }
 };
 
-export const fetchRedditPosts = async (query: string = 'stocks') => {
+export const fetchNews = async (symbol?: string) => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/reddit?q=${query}`);
-    return response.data.posts;
+    // Using Alpha Vantage News API
+    const API_KEY = 'YOUR_ALPHA_VANTAGE_KEY'; // Replace with your key
+    const topics = symbol ? `${symbol},stocks,market` : 'market,finance,stocks';
+    const response = await axios.get(
+      `https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=${topics}&apikey=${API_KEY}`
+    );
+    return response.data.feed || [];
   } catch (error) {
-    console.error('Reddit API error:', error);
-    throw new Error('Failed to fetch Reddit posts');
+    console.error('News API error:', error);
+    throw new Error('Failed to fetch news');
   }
 };
 
-export const fetchTwitterPosts = async (query: string) => {
+export const fetchSocialSentiment = async (symbol: string) => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/twitter?q=${query}`);
-    return response.data.tweets;
+    // Using StockTwits API
+    const response = await axios.get(
+      `https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`
+    );
+    return response.data.messages || [];
   } catch (error) {
-    console.error('Twitter API error:', error);
-    throw new Error('Failed to fetch Twitter posts');
+    console.error('Social API error:', error);
+    throw new Error('Failed to fetch social sentiment');
   }
 };
 
