@@ -1,147 +1,81 @@
 import React, { useState, useEffect } from 'react';
 import { Newspaper, ExternalLink, Loader2, RefreshCw, Filter, ChevronDown } from 'lucide-react';
+import { fetchNews } from '../services/api';
 
 interface NewsItem {
   title: string;
-  description: string;
   url: string;
   source: string;
-  publishedAt: string;
-  sentiment: 'positive' | 'neutral' | 'negative';
-  category: 'market' | 'stocks' | 'economy' | 'crypto' | 'commodities';
+  time_published: string;
+  summary: string;
+  sentiment?: {
+    score: number;
+    label: string;
+  };
+  topics?: string[];
 }
 
 const NewsFeed: React.FC = () => {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(300000); // 5 minutes
-  const [selectedCategories, setSelectedCategories] = useState<string[]>(['market', 'stocks', 'economy']);
-  const [showMore, setShowMore] = useState(false);
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(['market', 'stocks', 'economy']);
+  const [showTopics, setShowTopics] = useState(false);
 
-  const categories = [
+  const topics = [
     { id: 'market', label: 'Market' },
     { id: 'stocks', label: 'Stocks' },
     { id: 'economy', label: 'Economy' },
     { id: 'crypto', label: 'Crypto' },
-    { id: 'commodities', label: 'Commodities' }
+    { id: 'forex', label: 'Forex' }
   ];
 
-  const fetchNews = async () => {
-    setLoading(true);
+  const fetchNewsData = async () => {
     try {
-      // This would be replaced with actual API calls
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const mockNews: NewsItem[] = [
-        {
-          title: "Fed signals potential rate cuts as inflation cools",
-          description: "Federal Reserve officials indicate openness to rate reductions in 2024 as inflation shows consistent signs of moderating.",
-          url: "https://www.reuters.com/markets/us/federal-reserve-signals-rate-cuts-inflation-cools-2024",
-          source: "Reuters",
-          publishedAt: `${Math.floor(Math.random() * 30 + 5)} minutes ago`,
-          sentiment: "positive",
-          category: "economy"
-        },
-        {
-          title: "AI chip demand drives record semiconductor sales",
-          description: "Global semiconductor industry reports unprecedented growth driven by artificial intelligence and machine learning applications.",
-          url: "https://www.bloomberg.com/news/articles/2024-ai-chip-demand-semiconductor-sales",
-          source: "Bloomberg",
-          publishedAt: `${Math.floor(Math.random() * 60 + 30)} minutes ago`,
-          sentiment: "positive",
-          category: "stocks"
-        },
-        {
-          title: "Treasury yields retreat on economic data",
-          description: "U.S. Treasury yields decline as latest economic indicators suggest moderating growth and cooling inflation pressures.",
-          url: "https://www.wsj.com/articles/treasury-yields-retreat-economic-data-2024",
-          source: "Wall Street Journal",
-          publishedAt: `${Math.floor(Math.random() * 60 + 60)} minutes ago`,
-          sentiment: "neutral",
-          category: "market"
-        },
-        {
-          title: "Oil prices volatile amid Middle East tensions",
-          description: "Crude oil markets experience increased volatility as geopolitical tensions in the Middle East raise supply concerns.",
-          url: "https://www.ft.com/content/oil-markets-middle-east-tensions-2024",
-          source: "Financial Times",
-          publishedAt: `${Math.floor(Math.random() * 120 + 120)} minutes ago`,
-          sentiment: "negative",
-          category: "commodities"
-        },
-        {
-          title: "Bitcoin surges past key resistance levels",
-          description: "Leading cryptocurrency breaks through technical barriers as institutional adoption continues to grow.",
-          url: "https://www.coindesk.com/markets/2024/bitcoin-resistance-levels",
-          source: "CoinDesk",
-          publishedAt: `${Math.floor(Math.random() * 180 + 180)} minutes ago`,
-          sentiment: "positive",
-          category: "crypto"
-        },
-        {
-          title: "Global markets rally on positive economic data",
-          description: "Stock markets worldwide post gains as economic indicators suggest resilient growth despite challenges.",
-          url: "https://www.marketwatch.com/story/global-markets-rally-economic-data",
-          source: "MarketWatch",
-          publishedAt: `${Math.floor(Math.random() * 240 + 240)} minutes ago`,
-          sentiment: "positive",
-          category: "market"
-        },
-        {
-          title: "Tech sector leads market gains on AI optimism",
-          description: "Technology stocks outperform broader market as investors bet on artificial intelligence growth prospects.",
-          url: "https://www.cnbc.com/2024/tech-stocks-ai-optimism",
-          source: "CNBC",
-          publishedAt: `${Math.floor(Math.random() * 300 + 300)} minutes ago`,
-          sentiment: "positive",
-          category: "stocks"
-        },
-        {
-          title: "Gold prices hit new highs on safe-haven demand",
-          description: "Precious metals continue upward trend as investors seek safety amid global uncertainties.",
-          url: "https://www.reuters.com/markets/commodities/gold-prices-new-highs",
-          source: "Reuters",
-          publishedAt: `${Math.floor(Math.random() * 360 + 360)} minutes ago`,
-          sentiment: "positive",
-          category: "commodities"
-        }
-      ];
-      
-      // Filter news based on selected categories
-      const filteredNews = mockNews.filter(item => selectedCategories.includes(item.category));
-      setNews(filteredNews);
+      setLoading(true);
+      const data = await fetchNews();
+      setNews(data);
       setLastUpdate(new Date());
-    } catch (error) {
-      console.error('Failed to fetch news:', error);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch news. Please try again later.');
+      console.error('News fetch error:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchNews();
+    fetchNewsData();
     let interval: NodeJS.Timeout;
     
     if (autoRefresh) {
-      interval = setInterval(fetchNews, refreshInterval);
+      interval = setInterval(fetchNewsData, refreshInterval);
     }
     
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [autoRefresh, refreshInterval, selectedCategories]);
+  }, [autoRefresh, refreshInterval]);
 
-  const getSentimentColor = (sentiment: string) => {
-    switch (sentiment) {
-      case 'positive':
-        return 'bg-green-500/20 text-green-400';
-      case 'negative':
-        return 'bg-red-500/20 text-red-400';
-      default:
-        return 'bg-gray-500/20 text-gray-400';
-    }
+  const getSentimentColor = (sentiment: number) => {
+    if (sentiment > 0.3) return 'bg-green-500/20 text-green-400';
+    if (sentiment < -0.3) return 'bg-red-500/20 text-red-400';
+    return 'bg-gray-500/20 text-gray-400';
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    
+    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+    return date.toLocaleDateString();
   };
 
   const getTimeUntilNextUpdate = () => {
@@ -151,14 +85,6 @@ const NewsFeed: React.FC = () => {
     const minutes = Math.floor(diff / 60000);
     const seconds = Math.floor((diff % 60000) / 1000);
     return `Next update in ${minutes}m ${seconds}s`;
-  };
-
-  const toggleCategory = (categoryId: string) => {
-    setSelectedCategories(prev => 
-      prev.includes(categoryId)
-        ? prev.filter(c => c !== categoryId)
-        : [...prev, categoryId]
-    );
   };
 
   if (loading && news.length === 0) {
@@ -175,30 +101,36 @@ const NewsFeed: React.FC = () => {
         <div className="flex items-center gap-2">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Newspaper className="w-5 h-5 text-cyan-400" />
-            Market News
+            Financial News
           </h2>
           <div className="relative">
             <button
-              onClick={() => setShowMore(!showMore)}
+              onClick={() => setShowTopics(!showTopics)}
               className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-300 transition-colors"
             >
               <Filter className="w-4 h-4" />
               Filter
-              <ChevronDown className={`w-4 h-4 transition-transform ${showMore ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 transition-transform ${showTopics ? 'rotate-180' : ''}`} />
             </button>
-            {showMore && (
+            {showTopics && (
               <div className="absolute top-full left-0 mt-2 bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-2 z-10">
-                {categories.map(category => (
+                {topics.map(topic => (
                   <button
-                    key={category.id}
-                    onClick={() => toggleCategory(category.id)}
+                    key={topic.id}
+                    onClick={() => {
+                      setSelectedTopics(prev => 
+                        prev.includes(topic.id)
+                          ? prev.filter(t => t !== topic.id)
+                          : [...prev, topic.id]
+                      );
+                    }}
                     className={`block w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                      selectedCategories.includes(category.id)
+                      selectedTopics.includes(topic.id)
                         ? 'bg-violet-500/20 text-violet-400'
                         : 'text-gray-400 hover:bg-gray-700/50'
                     }`}
                   >
-                    {category.label}
+                    {topic.label}
                   </button>
                 ))}
               </div>
@@ -228,6 +160,12 @@ const NewsFeed: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-red-500/20 text-red-300 p-4 rounded-lg">
+          {error}
+        </div>
+      )}
       
       <div className="grid grid-cols-1 gap-4">
         {news.map((item, index) => (
@@ -240,20 +178,17 @@ const NewsFeed: React.FC = () => {
           >
             <div className="flex justify-between items-start">
               <h3 className="font-medium text-lg mb-2 text-gray-100 group-hover:text-blue-400">{item.title}</h3>
-              <div className="flex items-center gap-2">
-                <span className={`text-xs px-2 py-1 rounded-full ${getSentimentColor(item.sentiment)}`}>
-                  {item.sentiment.charAt(0).toUpperCase() + item.sentiment.slice(1)}
+              {item.sentiment && (
+                <span className={`text-xs px-2 py-1 rounded-full ${getSentimentColor(item.sentiment.score)}`}>
+                  {item.sentiment.label}
                 </span>
-                <span className="text-xs px-2 py-1 rounded-full bg-gray-700/40 text-gray-300">
-                  {item.category.charAt(0).toUpperCase() + item.category.slice(1)}
-                </span>
-              </div>
+              )}
             </div>
-            <p className="text-gray-400 text-sm mb-3">{item.description}</p>
+            <p className="text-gray-400 text-sm mb-3">{item.summary}</p>
             <div className="flex justify-between items-center text-xs text-gray-500">
               <div className="flex items-center gap-3">
                 <span>{item.source}</span>
-                <span>{item.publishedAt}</span>
+                <span>{formatDate(item.time_published)}</span>
               </div>
               <span className="text-blue-400 hover:text-blue-300 flex items-center gap-1">
                 Read more <ExternalLink className="w-3 h-3" />

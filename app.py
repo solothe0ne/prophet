@@ -43,7 +43,9 @@ twitter_client = tweepy.Client(
 # Cache for model predictions and market data
 prediction_cache = {}
 market_data_cache = {}
-MARKET_DATA_CACHE_DURATION = 60  # Cache duration in seconds
+news_cache = {}
+social_cache = {}
+CACHE_DURATION = 300  # 5 minutes
 
 # Market indices to track
 MARKET_INDICES = {
@@ -87,6 +89,64 @@ def calculate_technical_indicators(df):
     df['ATR'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close']).average_true_range()
     df = df.fillna(method='ffill').fillna(method='bfill')
     return df
+
+@app.route('/news', methods=['GET'])
+def get_news():
+    try:
+        symbol = request.args.get('symbol')
+        cache_key = f"news_{symbol if symbol else 'general'}"
+        
+        # Check cache
+        if cache_key in news_cache:
+            cache_time, cached_data = news_cache[cache_key]
+            if (datetime.now() - cache_time).seconds < CACHE_DURATION:
+                return jsonify(cached_data)
+        
+        # Fetch fresh news from Alpha Vantage
+        api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+        topics = f"{symbol},stocks,market" if symbol else "market,finance,stocks"
+        url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics={topics}&apikey={api_key}'
+        
+        response = requests.get(url)
+        data = response.json()
+        news = data.get('feed', [])
+        
+        # Cache the results
+        news_cache[cache_key] = (datetime.now(), news)
+        
+        return jsonify(news)
+    except Exception as e:
+        print(f"News API error: {str(e)}")
+        return jsonify({"error": "Failed to fetch news"}), 500
+
+@app.route('/social', methods=['GET'])
+def get_social():
+    try:
+        symbol = request.args.get('symbol')
+        if not symbol:
+            return jsonify({"error": "Symbol parameter is required"}), 400
+            
+        cache_key = f"social_{symbol}"
+        
+        # Check cache
+        if cache_key in social_cache:
+            cache_time, cached_data = social_cache[cache_key]
+            if (datetime.now() - cache_time).seconds < CACHE_DURATION:
+                return jsonify(cached_data)
+        
+        # Fetch StockTwits data
+        url = f'https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json'
+        response = requests.get(url)
+        data = response.json()
+        messages = data.get('messages', [])
+        
+        # Cache the results
+        social_cache[cache_key] = (datetime.now(), messages)
+        
+        return jsonify(messages)
+    except Exception as e:
+        print(f"Social API error: {str(e)}")
+        return jsonify({"error": "Failed to fetch social data"}), 500
 
 def fetch_financial_news():
     try:
@@ -231,7 +291,7 @@ def market_data():
         
         if 'data' in market_data_cache and 'timestamp' in market_data_cache:
             cache_age = (current_time - market_data_cache['timestamp']).total_seconds()
-            if cache_age < MARKET_DATA_CACHE_DURATION:
+            if cache_age < CACHE_DURATION:
                 return jsonify(market_data_cache['data'])
         
         market_data = {

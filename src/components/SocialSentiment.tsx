@@ -1,80 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { Twitter, MessageCircle, Loader2, TrendingUp, TrendingDown, ArrowRight, Search, RefreshCw } from 'lucide-react';
 import { Chart } from './Charts';
+import { fetchSocialSentiment } from '../services/api';
 
 interface SocialPost {
-  text: string;
-  source: 'twitter' | 'reddit';
-  user: string;
-  timestamp: string;
+  id: number;
+  body: string;
+  user: {
+    username: string;
+    avatar_url: string;
+  };
+  created_at: string;
   sentiment: number;
-  relevance: number;
-  url?: string;
+  source: string;
 }
 
 const popularTickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
-// Ticker-specific news and events database
-const tickerEvents = {
-  AAPL: [
-    { positive: "iPhone sales exceed expectations in emerging markets", sentiment: 0.85 },
-    { positive: "New MacBook Pro receives rave reviews", sentiment: 0.75 },
-    { negative: "Supply chain constraints may impact production", sentiment: -0.6 },
-    { neutral: "Apple's services revenue shows steady growth", sentiment: 0.3 },
-    { positive: "Vision Pro pre-orders surpass expectations", sentiment: 0.9 }
-  ],
-  MSFT: [
-    { positive: "Azure cloud revenue grows significantly", sentiment: 0.8 },
-    { positive: "AI integration boosts Microsoft 365 adoption", sentiment: 0.7 },
-    { negative: "Gaming division faces increased competition", sentiment: -0.5 },
-    { positive: "Enterprise solutions gain market share", sentiment: 0.6 },
-    { neutral: "New Windows features announced", sentiment: 0.2 }
-  ],
-  GOOGL: [
-    { positive: "Ad revenue rebounds strongly", sentiment: 0.75 },
-    { positive: "Gemini AI shows promising results", sentiment: 0.85 },
-    { negative: "Antitrust concerns weigh on outlook", sentiment: -0.7 },
-    { positive: "YouTube subscription growth accelerates", sentiment: 0.6 },
-    { neutral: "Cloud platform gains enterprise customers", sentiment: 0.4 }
-  ],
-  AMZN: [
-    { positive: "AWS maintains cloud market leadership", sentiment: 0.8 },
-    { positive: "Prime membership reaches new milestone", sentiment: 0.7 },
-    { negative: "Rising logistics costs impact margins", sentiment: -0.55 },
-    { positive: "International expansion shows promise", sentiment: 0.65 },
-    { neutral: "New fulfillment centers operational", sentiment: 0.3 }
-  ],
-  META: [
-    { positive: "Ad platform recovery exceeds expectations", sentiment: 0.9 },
-    { positive: "Metaverse engagement metrics improve", sentiment: 0.65 },
-    { negative: "Privacy changes affect targeting", sentiment: -0.5 },
-    { positive: "WhatsApp monetization progresses", sentiment: 0.7 },
-    { neutral: "New VR hardware announced", sentiment: 0.4 }
-  ],
-  NVDA: [
-    { positive: "AI chip demand remains strong", sentiment: 0.95 },
-    { positive: "Data center revenue hits record", sentiment: 0.85 },
-    { negative: "Chip prices face pressure", sentiment: -0.45 },
-    { positive: "New GPU architecture unveiled", sentiment: 0.75 },
-    { neutral: "Gaming segment stabilizes", sentiment: 0.3 }
-  ],
-  TSLA: [
-    { positive: "Production efficiency improves", sentiment: 0.8 },
-    { positive: "New gigafactory exceeds targets", sentiment: 0.75 },
-    { negative: "Competition intensifies in EV market", sentiment: -0.65 },
-    { positive: "FSD capability expands", sentiment: 0.7 },
-    { neutral: "Energy storage deployment grows", sentiment: 0.4 }
-  ]
-};
-
-const usernames = {
-  twitter: ['@marketanalyst', '@techtrader', '@stockguru', '@investorpro', '@marketwatch', '@tradingexpert'],
-  reddit: ['u/valueInvestor', 'u/techanalyst', 'u/stocktrader', 'u/marketpro', 'u/investorinsights']
-};
-
 const SocialSentiment: React.FC = () => {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [ticker, setTicker] = useState('AAPL');
   const [tickerInput, setTickerInput] = useState('AAPL');
   const [overallSentiment, setOverallSentiment] = useState(0);
@@ -83,82 +29,35 @@ const SocialSentiment: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(300000); // 5 minutes
 
-  const generateTickerSpecificPost = (ticker: string, event: any, timeAgo: number): SocialPost => {
-    const isTwitter = Math.random() > 0.5;
-    const username = isTwitter 
-      ? usernames.twitter[Math.floor(Math.random() * usernames.twitter.length)]
-      : usernames.reddit[Math.floor(Math.random() * usernames.reddit.length)];
-
-    let text = '';
-    if ('positive' in event) {
-      text = event.positive;
-    } else if ('negative' in event) {
-      text = event.negative;
-    } else {
-      text = event.neutral;
-    }
-
-    // Add ticker symbol and make text more social media-like
-    text = `$${ticker} - ${text}. ${
-      event.sentiment > 0 
-        ? ['Bullish! 🚀', 'Looking strong! 📈', 'Great potential! ⭐'][Math.floor(Math.random() * 3)]
-        : event.sentiment < 0
-        ? ['Concerning... 📉', 'Need to watch this 👀', 'Stay cautious 🔍'][Math.floor(Math.random() * 3)]
-        : ['Interesting development 🤔', 'Worth monitoring 📊', 'Keep an eye on this 👁️'][Math.floor(Math.random() * 3)]
-    }`;
-
-    return {
-      text,
-      source: isTwitter ? 'twitter' : 'reddit',
-      user: username,
-      timestamp: `${timeAgo}m ago`,
-      sentiment: event.sentiment,
-      relevance: 0.7 + Math.random() * 0.3,
-      url: isTwitter 
-        ? `https://twitter.com/example/status/${Math.random().toString(36).substr(2, 9)}`
-        : `https://reddit.com/r/stocks/comments/${Math.random().toString(36).substr(2, 9)}`
-    };
-  };
-
-  const fetchSocialData = async () => {
-    if (!loading) setLoading(true);
+  const fetchSentimentData = async () => {
     try {
-      // Get ticker-specific events
-      const events = tickerEvents[ticker as keyof typeof tickerEvents] || tickerEvents.AAPL;
-      
-      // Generate 5 posts with different timestamps
-      const mockPosts: SocialPost[] = events.map((event, index) => 
-        generateTickerSpecificPost(ticker, event, Math.floor(Math.random() * 30) + index * 15)
-      );
-
-      // Sort by timestamp (most recent first)
-      mockPosts.sort((a, b) => 
-        parseInt(a.timestamp) - parseInt(b.timestamp)
-      );
-      
-      setPosts(mockPosts);
+      setLoading(true);
+      const data = await fetchSocialSentiment(ticker);
+      setPosts(data.messages);
       
       // Calculate overall sentiment
-      const avgSentiment = mockPosts.reduce((acc, post) => acc + post.sentiment, 0) / mockPosts.length;
+      const avgSentiment = data.messages.reduce((acc: number, post: SocialPost) => acc + post.sentiment, 0) / data.messages.length;
       setOverallSentiment(avgSentiment);
       
       // Determine trend
       setSentimentTrend(avgSentiment > 0.1 ? 'up' : avgSentiment < -0.1 ? 'down' : 'neutral');
       
       setLastUpdate(new Date());
-    } catch (error) {
-      console.error('Failed to fetch social data:', error);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch social sentiment data. Please try again later.');
+      console.error('Social sentiment fetch error:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSocialData();
+    fetchSentimentData();
     let interval: NodeJS.Timeout;
     
     if (autoRefresh) {
-      interval = setInterval(fetchSocialData, refreshInterval);
+      interval = setInterval(fetchSentimentData, refreshInterval);
     }
     
     return () => {
@@ -175,11 +74,11 @@ const SocialSentiment: React.FC = () => {
   };
 
   const sentimentChartData = {
-    labels: ['7 Days Ago', '6 Days Ago', '5 Days Ago', '4 Days Ago', '3 Days Ago', '2 Days Ago', 'Today'],
+    labels: posts.map(post => new Date(post.created_at).toLocaleTimeString()),
     datasets: [
       {
         label: 'Social Sentiment',
-        data: [0.2, 0.15, -0.1, -0.3, 0.1, 0.4, overallSentiment],
+        data: posts.map(post => post.sentiment),
         borderColor: 'rgb(124, 58, 237)',
         backgroundColor: 'rgba(124, 58, 237, 0.5)',
         tension: 0.4,
@@ -197,10 +96,15 @@ const SocialSentiment: React.FC = () => {
     return (sentiment * 100).toFixed(0);
   };
 
-  const getSourceIcon = (source: string) => {
-    return source === 'twitter' ? 
-      <Twitter className="w-4 h-4 text-blue-400" /> : 
-      <MessageCircle className="w-4 h-4 text-orange-400" />;
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    
+    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+    return date.toLocaleDateString();
   };
 
   const getTimeUntilNextUpdate = () => {
@@ -211,6 +115,14 @@ const SocialSentiment: React.FC = () => {
     const seconds = Math.floor((diff % 60000) / 1000);
     return `Next update in ${minutes}m ${seconds}s`;
   };
+
+  if (loading && posts.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -274,6 +186,12 @@ const SocialSentiment: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-red-500/20 text-red-300 p-4 rounded-lg">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-gray-800/60 rounded-lg p-5 border border-gray-700/50 hover:bg-gray-800/70 transition-all duration-300">
@@ -339,30 +257,23 @@ const SocialSentiment: React.FC = () => {
           {posts.map((post, index) => (
             <div 
               key={index} 
-              className="border-b border-gray-700/50 pb-4 last:border-0 last:pb-0 hover:bg-gray-700/20 p-3 rounded-lg transition-all duration-200 hover:scale-[1.01] transform"
+              className="border-b border-gray-700/50 pb-4 last:border-0 last:pb-0 hover:bg-gray-700/20 p-3 rounded-lg transition-all duration-200"
             >
               <div className="flex items-start justify-between mb-1">
                 <div className="flex items-center text-sm">
-                  {getSourceIcon(post.source)}
-                  <span className="ml-2 text-gray-300">{post.user}</span>
-                  <span className="ml-2 text-gray-500">• {post.timestamp}</span>
+                  {post.source === 'twitter' ? (
+                    <Twitter className="w-4 h-4 text-blue-400" />
+                  ) : (
+                    <MessageCircle className="w-4 h-4 text-orange-400" />
+                  )}
+                  <span className="ml-2 text-gray-300">{post.user.username}</span>
+                  <span className="ml-2 text-gray-500">• {formatDate(post.created_at)}</span>
                 </div>
                 <div className={`px-2 py-1 rounded-full text-xs ${getSentimentColor(post.sentiment)} bg-opacity-20`}>
                   {getSentimentScore(post.sentiment)}
                 </div>
               </div>
-              <p className="text-gray-300 mb-2">{post.text}</p>
-              <div className="flex items-center justify-end text-xs text-gray-500">
-                <span>Relevance: {(post.relevance * 100).toFixed(0)}%</span>
-                <a 
-                  href={post.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ml-4 text-blue-400 hover:text-blue-300 flex items-center hover:scale-105 transform duration-200"
-                >
-                  View thread <ArrowRight className="w-3 h-3 ml-1" />
-                </a>
-              </div>
+              <p className="text-gray-300 mb-2">{post.body}</p>
             </div>
           ))}
         </div>
