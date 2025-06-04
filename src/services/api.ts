@@ -34,13 +34,8 @@ export const fetchPrediction = async (params: PredictionParams) => {
 
 export const fetchNews = async (symbol?: string) => {
   try {
-    // Using Alpha Vantage News API
-    const API_KEY = 'YOUR_ALPHA_VANTAGE_KEY'; // Replace with your key
-    const topics = symbol ? `${symbol},stocks,market` : 'market,finance,stocks';
-    const response = await axios.get(
-      `https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=${topics}&apikey=${API_KEY}`
-    );
-    return response.data.feed || [];
+    const response = await axios.get(`${API_BASE_URL}/news${symbol ? `?symbol=${symbol}` : ''}`);
+    return response.data;
   } catch (error) {
     console.error('News API error:', error);
     throw new Error('Failed to fetch news');
@@ -49,11 +44,8 @@ export const fetchNews = async (symbol?: string) => {
 
 export const fetchSocialSentiment = async (symbol: string) => {
   try {
-    // Using StockTwits API
-    const response = await axios.get(
-      `https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`
-    );
-    return response.data.messages || [];
+    const response = await axios.get(`${API_BASE_URL}/social?symbol=${symbol}`);
+    return response.data;
   } catch (error) {
     console.error('Social API error:', error);
     throw new Error('Failed to fetch social sentiment');
